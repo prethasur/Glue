@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+#PBS -P <PROJECT_CODE>
+#PBS -q gpuvolta
+#PBS -l walltime=06:00:00
+#PBS -l mem=64GB
+#PBS -l ncpus=8
+#PBS -l ngpus=1
+#PBS -l storage=gdata/<PROJECT_CODE>+scratch/<PROJECT_CODE>
+#PBS -j oe
+#PBS -o <REPO_ROOT>/logs/train_oracle_lora.$PBS_JOBID.log
+#PBS -N ben_s2_oracle_lora
+
+set -euo pipefail
+
+REPO_ROOT="${REPO_ROOT:-<REPO_ROOT>}"
+SUBSET_ROOT="${SUBSET_ROOT:-<OUTPUT_ROOT>/ben_s2_first_subset}"
+SPLIT_DIR="${SPLIT_DIR:-${SUBSET_ROOT}/splits}"
+DATA_ROOT="${DATA_ROOT:-${SUBSET_ROOT}}"
+OUTPUT_DIR="${OUTPUT_DIR:-<OUTPUT_ROOT>/oracle_lora_seed0}"
+SEED="${SEED:-0}"
+EPOCHS="${EPOCHS:-10}"
+BATCH_SIZE="${BATCH_SIZE:-64}"
+LR="${LR:-0.0001}"
+
+cd "${REPO_ROOT}"
+mkdir -p logs "${OUTPUT_DIR}"
+
+# Adjust modules for your NCI environment if needed.
+module purge || true
+# module load python3/3.11.0
+# module load cuda/12.1.1
+
+if [[ -f ".venvs/Glue/bin/activate" ]]; then
+  # shellcheck disable=SC1091
+  source ".venvs/Glue/bin/activate"
+else
+  # shellcheck disable=SC1091
+  source "$(conda info --base)/etc/profile.d/conda.sh"
+  conda activate Glue
+fi
+
+python -m src.training.train_baseline \
+  --mode oracle_lora \
+  --split_dir "${SPLIT_DIR}" \
+  --data_root "${DATA_ROOT}" \
+  --output_dir "${OUTPUT_DIR}" \
+  --seed "${SEED}" \
+  --epochs "${EPOCHS}" \
+  --batch_size "${BATCH_SIZE}" \
+  --lr "${LR}" \
+  --device cuda \
+  --num_workers 4

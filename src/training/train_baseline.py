@@ -1,0 +1,214 @@
+"""Train baseline models for BigEarthNet-S2 split experiments."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import random
+from pathlib import Path
+
+import numpy as np
+import torch
+from sklearn.metrics import average_precision_score, f1_score
+from torch import nn
+from torch.utils.data import DataLoader
+from torchvision import models
+
+from src.data.ben_s2_dataset import BigEarthNetS2RGBDataset, build_label_to_index, load_label_to_index, save_label_to_index
+
+
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+
+def build_head_only_resnet50(num_labels: int) -> nn.Module:
+    try:
+        weights = models.ResNet50_Weights.DEFAULT
+        model = models.resnet50(weights=weights)
+    except Exception as exc:
+        print(f"WARNING: could not load ImageNet-pretrained ResNet-50 weights ({exc}); using random init.")
+        model = models.resnet50(weights=None)
+
+    in_features = model.fc.in_features
+    for parameter in model.parameters():
+        parameter.requires_grad = False
+    model.fc = nn.Linear(in_features, num_labels)
+    return model
+
+
+def make_loader(
+    split_dir: Path,
+    split_name: str,
+    label_to_index: dict[str, int],
+    batch_size: int,
+    shuffle: bool,
+    num_workers: int,
+    data_root: Path | None,
+) -> DataLoader:
+    dataset = BigEarthNetS2RGBDataset(split_dir / f"{split_name}.csv", label_to_index, data_root=data_root)
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        pin_memory=torch.cuda.is_available(),
+    )
+
+
+def compute_metrics(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    loss: float,
+) -> dict[str, float]:
+    probabilities = torch.sigmoid(logits).cpu().numpy()
+    y_true = targets.cpu().numpy()
+    y_pred = (probabilities >= 0.5).astype(np.int32)
+    try:
+        mean_ap = float(average_precision_score(y_true, probabilities, average="macro"))
+    except ValueError:
+        mean_ap = float("nan")
+    return {
+        "loss": loss,
+        "mAP": mean_ap,
+        "micro_f1": float(f1_score(y_true, y_pred, average="micro", zero_division=0)),
+        "macro_f1": float(f1_score(y_true, y_pred, average="macro", zero_division=0)),
+    }
+
+
+def run_epoch(
+    model: nn.Module,
+    loader: DataLoader,
+    criterion: nn.Module,
+    device: torch.device,
+    optimizer: torch.optim.Optimizer | None = None,
+) -> dict[str, float]:
+    is_train = optimizer is not None
+    model.train(is_train)
+    total_loss = 0.0
+    total_examples = 0
+    logits_chunks: list[torch.Tensor] = []
+    target_chunks: list[torch.Tensor] = []
+
+    for images, labels, _metadata in loader:
+        images = images.to(device)
+        labels = labels.to(device)
+        with torch.set_grad_enabled(is_train):
+            logits = model(images)
+            loss = criterion(logits, labels)
+            if is_train:
+                optimizer.zero_grad(set_to_none=True)
+                loss.backward()
+                optimizer.step()
+
+        batch_size = images.size(0)
+        total_loss += loss.item() * batch_size
+        total_examples += batch_size
+        logits_chunks.append(logits.detach().cpu())
+        target_chunks.append(labels.detach().cpu())
+
+    mean_loss = total_loss / max(total_examples, 1)
+    return compute_metrics(torch.cat(logits_chunks), torch.cat(target_chunks), mean_loss)
+
+
+def write_metrics(path: Path, rows: list[dict[str, float | int | str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        fieldnames = ["epoch", "split", "loss", "mAP", "micro_f1", "macro_f1"]
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def train_head_only(args: argparse.Namespace) -> None:
+    split_dir = args.split_dir.expanduser().resolve()
+    output_dir = args.output_dir.expanduser().resolve()
+    data_root = args.data_root.expanduser().resolve() if args.data_root else None
+    output_dir.mkdir(parents=True, exist_ok=True)
+    label_path = split_dir / "label_to_index.json"
+    if label_path.is_file():
+        label_to_index = load_label_to_index(label_path)
+    else:
+        label_to_index = build_label_to_index(split_dir)
+        save_label_to_index(label_to_index, label_path)
+    device = torch.device(args.device if args.device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu"))
+
+    set_seed(args.seed)
+    model = build_head_only_resnet50(num_labels=len(label_to_index)).to(device)
+    optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=args.lr)
+    criterion = nn.BCEWithLogitsLoss()
+
+    train_loader = make_loader(split_dir, "train_seen", label_to_index, args.batch_size, True, args.num_workers, data_root)
+    val_loader = make_loader(split_dir, "val_seen", label_to_index, args.batch_size, False, args.num_workers, data_root)
+    test_loader = make_loader(split_dir, "test_unseen", label_to_index, args.batch_size, False, args.num_workers, data_root)
+
+    metrics_rows: list[dict[str, float | int | str]] = []
+    best_val_map = -1.0
+    for epoch in range(1, args.epochs + 1):
+        train_metrics = run_epoch(model, train_loader, criterion, device, optimizer)
+        val_metrics = run_epoch(model, val_loader, criterion, device)
+        for split_name, metrics in [("train_seen", train_metrics), ("val_seen", val_metrics)]:
+            row = {"epoch": epoch, "split": split_name, **metrics}
+            metrics_rows.append(row)
+            print(row)
+
+        if val_metrics["mAP"] > best_val_map:
+            best_val_map = val_metrics["mAP"]
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model_state_dict": model.state_dict(),
+                    "label_to_index": label_to_index,
+                    "args": vars(args),
+                    "val_metrics": val_metrics,
+                },
+                output_dir / "best_checkpoint.pt",
+            )
+        write_metrics(output_dir / "metrics.csv", metrics_rows)
+
+    test_metrics = run_epoch(model, test_loader, criterion, device)
+    metrics_rows.append({"epoch": args.epochs, "split": "test_unseen", **test_metrics})
+    write_metrics(output_dir / "metrics.csv", metrics_rows)
+    torch.save(
+        {
+            "epoch": args.epochs,
+            "model_state_dict": model.state_dict(),
+            "label_to_index": label_to_index,
+            "args": vars(args),
+            "test_metrics": test_metrics,
+        },
+        output_dir / "last_checkpoint.pt",
+    )
+    print({"epoch": args.epochs, "split": "test_unseen", **test_metrics})
+    print(f"Saved metrics and checkpoints to {output_dir}")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--mode", required=True, choices=["head_only", "pooled_lora", "oracle_lora"])
+    parser.add_argument("--split_dir", required=True, type=Path)
+    parser.add_argument("--output_dir", required=True, type=Path)
+    parser.add_argument("--data_root", default=None, type=Path, help="Optional BigEarthNet-S2 root or exported subset root.")
+    parser.add_argument("--epochs", default=5, type=int)
+    parser.add_argument("--batch_size", default=64, type=int)
+    parser.add_argument("--lr", default=1e-3, type=float)
+    parser.add_argument("--seed", default=0, type=int)
+    parser.add_argument("--device", default="auto", help="auto, cpu, cuda, cuda:0, ...")
+    parser.add_argument("--num_workers", default=4, type=int)
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    if args.mode != "head_only":
+        raise NotImplementedError(
+            f"--mode {args.mode} is reserved for the LoRA baselines, but LoRA training is not implemented yet."
+        )
+    train_head_only(args)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

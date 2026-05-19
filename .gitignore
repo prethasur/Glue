@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# Large data and generated outputs
+outputs/
+data/
+*.tif
+*.tiff
+*.pt
+*.pth
+*.ckpt
+*.tar
+*.zip
+*.parquet
+
+# Logs
+logs/
+*.log
+*.out
+*.err
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/

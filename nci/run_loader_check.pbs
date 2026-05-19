@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+#PBS -P <PROJECT_CODE>
+#PBS -q gpuvolta
+#PBS -l walltime=00:30:00
+#PBS -l mem=16GB
+#PBS -l ncpus=4
+#PBS -l ngpus=1
+#PBS -l storage=gdata/<PROJECT_CODE>+scratch/<PROJECT_CODE>
+#PBS -j oe
+#PBS -o <REPO_ROOT>/logs/loader_check.$PBS_JOBID.log
+#PBS -N ben_s2_loader_check
+
+set -euo pipefail
+
+REPO_ROOT="${REPO_ROOT:-<REPO_ROOT>}"
+SUBSET_ROOT="${SUBSET_ROOT:-<OUTPUT_ROOT>/ben_s2_first_subset}"
+SPLIT_DIR="${SPLIT_DIR:-${SUBSET_ROOT}/splits}"
+DATA_ROOT="${DATA_ROOT:-${SUBSET_ROOT}}"
+BATCH_SIZE="${BATCH_SIZE:-8}"
+
+cd "${REPO_ROOT}"
+mkdir -p logs
+
+# Adjust modules for your NCI environment if needed.
+module purge || true
+# module load python3/3.11.0
+# module load cuda/12.1.1
+
+if [[ -f ".venvs/Glue/bin/activate" ]]; then
+  # shellcheck disable=SC1091
+  source ".venvs/Glue/bin/activate"
+else
+  # shellcheck disable=SC1091
+  source "$(conda info --base)/etc/profile.d/conda.sh"
+  conda activate Glue
+fi
+
+python -m src.data.check_ben_s2_loader \
+  --split_dir "${SPLIT_DIR}" \
+  --data_root "${DATA_ROOT}" \
+  --batch_size "${BATCH_SIZE}"
