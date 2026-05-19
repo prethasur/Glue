@@ -11,6 +11,9 @@ import pandas as pd
 from src.data.ben_s2_dataset import SPLIT_NAMES
 
 
+RGB_BANDS = ("B02", "B03", "B04")
+
+
 def portable_patch_dir(patch_id: str) -> str:
     return f"patches/{patch_id}"
 
@@ -25,7 +28,30 @@ def copy_patch_folder(source: Path, destination: Path) -> None:
     shutil.copytree(source, destination)
 
 
-def export_subset(split_dir: Path, subset_root: Path) -> None:
+def copy_rgb_files(source: Path, destination: Path, patch_id: str) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    for band in RGB_BANDS:
+        source_file = source / f"{patch_id}_{band}.tif"
+        if not source_file.is_file():
+            raise FileNotFoundError(f"Missing required RGB band for {patch_id}: {source_file}")
+        destination_file = destination / source_file.name
+        if not destination_file.is_file():
+            shutil.copy2(source_file, destination_file)
+
+
+def verify_rgb_paths(subset_root: Path, split_dir: Path) -> None:
+    for split_name in SPLIT_NAMES:
+        csv_path = split_dir / f"{split_name}.csv"
+        df = pd.read_csv(csv_path)
+        for row in df.itertuples(index=False):
+            for band in RGB_BANDS:
+                column = f"{band}_path"
+                path = subset_root / str(getattr(row, column))
+                if not path.is_file():
+                    raise FileNotFoundError(f"Rewritten {column} does not exist: {path}")
+
+
+def export_subset(split_dir: Path, subset_root: Path, rgb_only: bool = False) -> None:
     patches_root = subset_root / "patches"
     portable_split_dir = subset_root / "splits"
     patches_root.mkdir(parents=True, exist_ok=True)
@@ -56,7 +82,11 @@ def export_subset(split_dir: Path, subset_root: Path) -> None:
         rewritten[split_name] = df
 
     for patch_id, source in sorted(patch_sources.items()):
-        copy_patch_folder(source, patches_root / patch_id)
+        destination = patches_root / patch_id
+        if rgb_only:
+            copy_rgb_files(source, destination, patch_id)
+        else:
+            copy_patch_folder(source, destination)
 
     for split_name, df in rewritten.items():
         df.to_csv(portable_split_dir / f"{split_name}.csv", index=False)
@@ -65,7 +95,9 @@ def export_subset(split_dir: Path, subset_root: Path) -> None:
     if label_json.is_file():
         shutil.copy2(label_json, portable_split_dir / "label_to_index.json")
 
+    verify_rgb_paths(subset_root, portable_split_dir)
     print(f"unique patches copied: {len(patch_sources)}")
+    print(f"rgb_only: {rgb_only}")
     print("split sample counts:")
     for split_name, count in split_counts.items():
         print(f"  {split_name}: {count}")
@@ -87,6 +119,11 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Output root for portable patches and rewritten split CSVs.",
     )
+    parser.add_argument(
+        "--rgb_only",
+        action="store_true",
+        help="Copy only B02/B03/B04 TIFF files instead of full patch folders.",
+    )
     return parser.parse_args()
 
 
@@ -97,7 +134,7 @@ def main() -> int:
     if not split_dir.is_dir():
         print(f"ERROR: split_dir not found: {split_dir}")
         return 2
-    export_subset(split_dir, subset_root)
+    export_subset(split_dir, subset_root, rgb_only=args.rgb_only)
     return 0
 
 
