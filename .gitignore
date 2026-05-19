@@ -6,8 +6,8 @@ venv/
 .env
 
 # Large data and generated outputs
-outputs/
-data/
+/outputs/
+/data/
 *.tif
 *.tiff
 *.pt
