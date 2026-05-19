@@ -12,8 +12,7 @@ import pandas as pd
 import tifffile
 import torch
 from torch.utils.data import Dataset
-from torchvision.transforms import InterpolationMode
-from torchvision.transforms import functional as F
+import torch.nn.functional as F
 
 
 SPLIT_NAMES = [
@@ -106,14 +105,14 @@ def read_rgb_tensor(b04_path: str, b03_path: str, b02_path: str, image_size: int
 
     # Sentinel-2 L2A reflectance is commonly scaled by 10000. Clamp keeps clouds/outliers tame.
     image = np.clip(image, 0.0, 10000.0) / 10000.0
-    tensor = torch.from_numpy(image)
-    tensor = F.resize(
-        tensor,
-        [image_size, image_size],
-        interpolation=InterpolationMode.BILINEAR,
-        antialias=True,
-    )
-    return tensor.to(torch.float32)
+    tensor = torch.from_numpy(image).to(torch.float32)
+    tensor = F.interpolate(
+        tensor.unsqueeze(0),
+        size=(image_size, image_size),
+        mode="bilinear",
+        align_corners=False,
+    ).squeeze(0)
+    return tensor
 
 
 class BigEarthNetS2RGBDataset(Dataset):
