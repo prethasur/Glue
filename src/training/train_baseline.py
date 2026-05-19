@@ -24,14 +24,38 @@ def set_seed(seed: int) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
-def build_head_only_resnet50(num_labels: int) -> nn.Module:
-    try:
-        weights = models.ResNet50_Weights.DEFAULT
-        model = models.resnet50(weights=weights)
-    except Exception as exc:
-        print(f"WARNING: could not load ImageNet-pretrained ResNet-50 weights ({exc}); using random init.")
-        model = models.resnet50(weights=None)
+def str_to_bool(value: str | bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = value.strip().lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    raise argparse.ArgumentTypeError("Expected true or false.")
 
+
+def build_resnet50(pretrained: bool) -> nn.Module:
+    if pretrained:
+        try:
+            weights_enum = getattr(models, "ResNet50_Weights")
+            return models.resnet50(weights=weights_enum.DEFAULT)
+        except Exception as exc:
+            print(f"WARNING: failed to load pretrained ResNet-50 with new torchvision API: {exc}")
+        try:
+            return models.resnet50(pretrained=True)
+        except Exception as exc:
+            print(f"WARNING: failed to load pretrained ResNet-50 with old torchvision API: {exc}")
+            print("WARNING: falling back to pretrained=False.")
+
+    try:
+        return models.resnet50(weights=None)
+    except TypeError:
+        return models.resnet50(pretrained=False)
+
+
+def build_head_only_resnet50(num_labels: int, pretrained: bool = False) -> nn.Module:
+    model = build_resnet50(pretrained=pretrained)
     in_features = model.fc.in_features
     for parameter in model.parameters():
         parameter.requires_grad = False
@@ -136,7 +160,7 @@ def train_head_only(args: argparse.Namespace) -> None:
     device = torch.device(args.device if args.device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu"))
 
     set_seed(args.seed)
-    model = build_head_only_resnet50(num_labels=len(label_to_index)).to(device)
+    model = build_head_only_resnet50(num_labels=len(label_to_index), pretrained=str_to_bool(args.pretrained)).to(device)
     optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=args.lr)
     criterion = nn.BCEWithLogitsLoss()
 
@@ -191,6 +215,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split_dir", required=True, type=Path)
     parser.add_argument("--output_dir", required=True, type=Path)
     parser.add_argument("--data_root", default=None, type=Path, help="Optional BigEarthNet-S2 root or exported subset root.")
+    parser.add_argument("--pretrained", default="false", choices=["true", "false"])
     parser.add_argument("--epochs", default=5, type=int)
     parser.add_argument("--batch_size", default=64, type=int)
     parser.add_argument("--lr", default=1e-3, type=float)

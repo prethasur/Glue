@@ -36,6 +36,7 @@ python -m src.training.train_baseline \
   --split_dir "${SPLIT_DIR}" \
   --data_root "${DATA_ROOT}" \
   --output_dir "${OUTPUT_DIR}" \
+  --pretrained false \
   --seed "${SEED}" \
   --epochs "${EPOCHS}" \
   --batch_size "${BATCH_SIZE}" \
