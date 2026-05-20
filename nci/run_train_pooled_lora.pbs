@@ -7,46 +7,45 @@
 #PBS -l ngpus=1
 #PBS -l storage=gdata/<PROJECT_CODE>+scratch/<PROJECT_CODE>
 #PBS -j oe
-#PBS -o <REPO_ROOT>/logs/train_pooled_lora.$PBS_JOBID.log
+#PBS -o /scratch/yo13/ps8396/Glue/logs/train_pooled_lora.$PBS_JOBID.log
 #PBS -N ben_s2_pooled_lora
 
 set -euo pipefail
 
-REPO_ROOT="${REPO_ROOT:-<REPO_ROOT>}"
-SUBSET_ROOT="${SUBSET_ROOT:-<OUTPUT_ROOT>/ben_s2_first_subset}"
-SPLIT_DIR="${SPLIT_DIR:-${SUBSET_ROOT}/splits}"
-DATA_ROOT="${DATA_ROOT:-${SUBSET_ROOT}}"
-OUTPUT_DIR="${OUTPUT_DIR:-<OUTPUT_ROOT>/pooled_lora_seed0}"
+REPO_ROOT="/scratch/yo13/ps8396/Glue"
+DATA_ROOT="/scratch/yo13/ps8396/ben_s2_first_subset_rgb"
+SPLIT_DIR="/scratch/yo13/ps8396/ben_s2_first_subset_rgb/splits"
+OUTPUT_ROOT="/scratch/yo13/ps8396/glue_outputs"
+OUTPUT_DIR="${OUTPUT_DIR:-${OUTPUT_ROOT}/pooled_lora_seed0}"
 SEED="${SEED:-0}"
 EPOCHS="${EPOCHS:-10}"
 BATCH_SIZE="${BATCH_SIZE:-64}"
 LR="${LR:-0.0001}"
+LORA_RANK="${LORA_RANK:-4}"
+LORA_ALPHA="${LORA_ALPHA:-8.0}"
+LORA_TARGET_LAYERS="${LORA_TARGET_LAYERS:-layer4}"
 
 cd "${REPO_ROOT}"
 mkdir -p logs "${OUTPUT_DIR}"
 
-# Adjust modules for your NCI environment if needed.
-module purge || true
-# module load python3/3.11.0
-# module load cuda/12.1.1
+module purge
+module load pytorch/1.10.0
 
-if [[ -f ".venvs/Glue/bin/activate" ]]; then
-  # shellcheck disable=SC1091
-  source ".venvs/Glue/bin/activate"
-else
-  # shellcheck disable=SC1091
-  source "$(conda info --base)/etc/profile.d/conda.sh"
-  conda activate Glue
-fi
+# shellcheck disable=SC1091
+source /scratch/yo13/ps8396/Glue/.venvs/Glue/bin/activate
 
 python -m src.training.train_baseline \
   --mode pooled_lora \
   --split_dir "${SPLIT_DIR}" \
   --data_root "${DATA_ROOT}" \
   --output_dir "${OUTPUT_DIR}" \
+  --pretrained false \
   --seed "${SEED}" \
   --epochs "${EPOCHS}" \
   --batch_size "${BATCH_SIZE}" \
   --lr "${LR}" \
+  --lora_rank "${LORA_RANK}" \
+  --lora_alpha "${LORA_ALPHA}" \
+  --lora_target_layers "${LORA_TARGET_LAYERS}" \
   --device cuda \
   --num_workers 4
