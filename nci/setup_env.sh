@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run from /scratch/<PROJECT_CODE>/<USER>/Glue on Gadi.
+# Run from your Glue checkout on Gadi (e.g. under /scratch/<PROJECT_CODE>/<USER>/).
+# Creates a user-level venv; installs nothing system-wide. Not re-tested on Gadi in this revision.
 module purge
 module load pytorch/1.10.0
 

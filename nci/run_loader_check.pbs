@@ -7,25 +7,22 @@
 #PBS -l ngpus=1
 #PBS -l storage=gdata/<PROJECT_CODE>+scratch/<PROJECT_CODE>
 #PBS -j oe
-#PBS -o /scratch/<PROJECT_CODE>/<USER>/Glue/logs/loader_check.$PBS_JOBID.log
 #PBS -N ben_s2_loader_check
+# Template; see nci/README_NCI.md. Required (qsub -v): GLUE_ROOT, SPLIT_DIR, DATA_ROOT.
+# Not tested on Gadi in this revision.
 
 set -euo pipefail
-
-REPO_ROOT="/scratch/<PROJECT_CODE>/<USER>/Glue"
-DATA_ROOT="/scratch/<PROJECT_CODE>/<USER>/ben_s2_first_subset_rgb"
-SPLIT_DIR="/scratch/<PROJECT_CODE>/<USER>/ben_s2_first_subset_rgb/splits"
-OUTPUT_ROOT="/scratch/<PROJECT_CODE>/<USER>/glue_outputs"
+: "${GLUE_ROOT:?set GLUE_ROOT via qsub -v}"
+: "${SPLIT_DIR:?set SPLIT_DIR via qsub -v}"
+: "${DATA_ROOT:?set DATA_ROOT via qsub -v}"
 BATCH_SIZE="${BATCH_SIZE:-8}"
+VENV="${VENV:-${GLUE_ROOT}/.venvs/Glue}"
 
-cd "${REPO_ROOT}"
-mkdir -p logs "${OUTPUT_ROOT}"
-
+cd "${GLUE_ROOT}"
 module purge
-module load pytorch/1.10.0
-
+module load "${TORCH_MODULE:-pytorch/1.10.0}"
 # shellcheck disable=SC1091
-source /scratch/<PROJECT_CODE>/<USER>/Glue/.venvs/Glue/bin/activate
+source "${VENV}/bin/activate"
 
 python -m src.data.check_ben_s2_loader \
   --split_dir "${SPLIT_DIR}" \
