@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run from /scratch/yo13/ps8396/Glue on Gadi.
+# Run from /scratch/<PROJECT_CODE>/<USER>/Glue on Gadi.
 module purge
 module load pytorch/1.10.0
 
