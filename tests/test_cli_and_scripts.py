@@ -11,6 +11,7 @@ from conftest import REPO
 
 MODULES = ["src.data.build_ben_s2_metadata", "src.data.validate_ben_s2_metadata",
            "src.data.recommend_ben_s2_split_candidates", "src.data.create_ben_s2_first_split",
+           "src.data.recommend_ben_s2_label_aware_candidates", "src.data.create_ben_s2_labelhard_split",
            "src.data.export_ben_s2_subset", "src.data.check_ben_s2_loader", "src.training.train_baseline"]
 BASH = shutil.which("bash")
 
