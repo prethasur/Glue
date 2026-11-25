@@ -2,7 +2,7 @@
 
 BigEarthNet-S2 data preparation and controlled model-adaptation experiments.
 
-Glue builds tile–season compositional splits of BigEarthNet-S2 and prepares multi-label Sentinel-2 RGB inputs. It then compares classifier-head training with low-rank convolutional adapters on a frozen ResNet-50, under an explicit model-selection protocol. It is a small research codebase with tests and NCI Gadi job templates. It is not a framework, and it contains no published results.
+Glue builds tile–season compositional splits of BigEarthNet-S2 and prepares multi-label Sentinel-2 RGB inputs. It then compares classifier-head training with low-rank convolutional adapters on a frozen ResNet-50, under an explicit model-selection protocol. It is a small research codebase with tests and NCI Gadi job templates. It is not a framework, and the only reported numbers are explicitly labelled historical exploratory runs.
 
 ```bash
 pip install -r requirements.txt     # with a PyTorch/torchvision build for your platform
@@ -48,6 +48,27 @@ The first split (`create_ben_s2_first_split.py`) holds out one (tile, season) ce
 - macro-F1 at a fixed 0.5 threshold.
 
 Macro averages include only classes with at least one positive in the evaluated split; `n_classes_evaluated` records how many.
+
+## Label-aware hard split and historical runs
+
+A second, label-aware split holds out `T29UPU_spring` and trains on `T29UPU_summer`, `T29UPU_winter` and `T29SND_spring`. The seed-0 split contained 21,299 training, 2,367 validation, 6,462 oracle-training and 1,616 shared held-out test samples. The test set contained 17 of 19 labels; Coastal wetlands had one positive. The label-distribution Jensen–Shannon divergence between seen training and test was 0.0811.
+
+```bash
+python -m src.data.recommend_ben_s2_label_aware_candidates --metadata_csv outputs/ben_s2_clean_metadata.csv
+python -m src.data.create_ben_s2_labelhard_split --metadata_csv outputs/ben_s2_clean_metadata.csv
+```
+
+The candidate recommender uses the seeded test subset's labels to choose cells. This is exploratory test-set-informed design; freeze the split and selection criteria before subsequent evaluation. Geographic proximity and independence are not established by tile IDs alone.
+
+Earlier Gadi runs on this hard split recorded the following **exploratory legacy-protocol, seed-0, final-epoch** metrics. These are not protocol-version-2 benchmarks:
+
+| Model | mAP | Micro-F1 | Macro-F1 |
+|---|---:|---:|---:|
+| Head only | 0.311 | 0.541 | 0.157 |
+| Pooled LoRA-style adapter | 0.333 | 0.646 | 0.218 |
+| Oracle LoRA-style adapter | 0.343 | 0.687 | 0.222 |
+
+The runs used a random frozen backbone. The legacy oracle evaluated its test set repeatedly and selected checkpoints using test performance, and the old metrics averaged over absent classes. Therefore these single-seed results should not be interpreted as reliable evidence of an oracle gap or compared directly with the revised protocol. Re-run with the current code, fixed selection, pretrained weights, per-class support and multiple seeds before drawing conclusions.
 
 ## Repository structure
 
@@ -114,7 +135,7 @@ Not verified here: any run on real BigEarthNet-S2 data, GPU-scale training, or a
 
 ## Limitations
 
-- No benchmark results are published. Results produced with earlier versions are not comparable: they used a random backbone, oracle selection on test data, last-epoch test evaluation, and AP averaged over absent classes. The current behaviour is `protocol_version: 2`.
+- No results from the revised protocol are published. Results produced with earlier versions are not comparable: they used a random backbone, oracle selection on test data, last-epoch test evaluation, and AP averaged over absent classes. The current behaviour is `protocol_version: 2`.
 - One held-out cell and one seed. Patches from the held-out tile appear in training in other seasons, so this tests compositional (tile × season) generalisation, not spatial independence. The random oracle and validation halves contain spatially adjacent patches.
 - The label vocabulary is built from the label names in the split files, including test splits. It is not used for selection.
 - RGB bands only; no ImageNet mean/std normalisation; fixed 0.5 threshold for F1.
