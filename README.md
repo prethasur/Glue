@@ -6,7 +6,32 @@ Glue builds tile–season compositional splits of BigEarthNet-S2 and prepares mu
 
 ```bash
 pip install -r requirements.txt     # with a PyTorch/torchvision build for your platform
-python -m pytest tests              # 44 offline CPU tests on synthetic data, ~1 min
+python -m pytest tests              # 46 offline CPU tests on synthetic data, ~1 min
+```
+
+## At a glance
+
+| | |
+|---|---|
+| **Research question** | When a satellite-image classifier has seen a tile and a season separately, but never that combination, how much does a small adapter trained on pooled seen data recover, compared with one trained on data from the unseen combination itself? |
+| **Approach** | Hold out one (tile, season) cell of BigEarthNet-S2. Compare three models on the held-out cell: a frozen ResNet-50 with only its head trained, a pooled model with LoRA-style adapters trained on seen cells, and an oracle with the same adapters trained on part of the held-out cell |
+| **Built** | A metadata pipeline over 480,038 patches, two compositional split designs (including a label-aware hard split), an RGB multi-label loader, the adapter models with validation-only selection, NCI Gadi job templates, and 46 offline tests |
+| **Status** | Exploratory first runs complete on both splits (below). The revised protocol (`protocol_version: 2`) is implemented and tested on synthetic data but has not yet been run on the real dataset |
+
+```mermaid
+flowchart LR
+  A[BigEarthNet-S2<br/>480,038 patches] --> B[Metadata join<br/>and validation]
+  B --> C[Choose held-out<br/>tile × season cell]
+  C --> D[Seen cells<br/>train / val]
+  C --> E[Held-out cell]
+  E --> F[Oracle train]
+  E --> G[Held-out test]
+  D --> H[Head only]
+  D --> I[Pooled LoRA]
+  F --> J[Oracle LoRA]
+  H --> G
+  I --> G
+  J --> G
 ```
 
 ## Implemented capabilities
@@ -14,7 +39,7 @@ python -m pytest tests              # 44 offline CPU tests on synthetic data, ~1
 | Area | What exists | Where |
 |---|---|---|
 | Metadata | Join `metadata.parquet` to local patch folders; derive tile, date and season from patch IDs. Validation report: required columns, empty values, missing band files, tile-ID format, month validity and month→season consistency | `src/data/build_ben_s2_metadata.py`, `validate_ben_s2_metadata.py` |
-| Split design | Rank candidate held-out (tile, season) cells by size and label-distribution divergence; write a fixed seeded split | `src/data/recommend_ben_s2_split_candidates.py`, `create_ben_s2_first_split.py` |
+| Split design | Rank candidate held-out (tile, season) cells by size and label-distribution divergence; write a fixed seeded split. A label-aware variant also checks label coverage of the held-out test subset | `src/data/recommend_ben_s2_split_candidates.py`, `create_ben_s2_first_split.py`, `recommend_ben_s2_label_aware_candidates.py`, `create_ben_s2_labelhard_split.py` |
 | Portability | Copy the selected patches (optionally RGB bands only) with relative paths for transfer to HPC | `src/data/export_ben_s2_subset.py` |
 | Loading | RGB (B04/B03/B02) tensors, reflectance clipped to [0, 10000] and scaled to [0, 1], bilinear resize to 224; multi-hot labels; path re-rooting via `--data_root` / `BEN_S2_DATA_ROOT` | `src/data/ben_s2_dataset.py`, `check_ben_s2_loader.py` |
 | Adaptation | Frozen ResNet-50 (BatchNorm statistics frozen too) with a new linear head; optional `LoRAConv2d` adapters (below) | `src/training/train_baseline.py` |
@@ -51,7 +76,7 @@ Macro averages include only classes with at least one positive in the evaluated 
 
 ## Label-aware hard split and historical runs
 
-A second, label-aware split holds out `T29UPU_spring` and trains on `T29UPU_summer`, `T29UPU_winter` and `T29SND_spring`. The seed-0 split contained 21,299 training, 2,367 validation, 6,462 oracle-training and 1,616 shared held-out test samples. The test set contained 17 of 19 labels; Coastal wetlands had one positive. The label-distribution Jensen–Shannon divergence between seen training and test was 0.0811.
+A second, label-aware split holds out `T29UPU_spring` and trains on `T29UPU_summer`, `T29UPU_winter` and `T29SND_spring`. Unlike the first split, the held-out cell is divided 80/20, and `test_unseen` and `oracle_test_unseen` are the same 20% subset, so all three models are scored on identical samples. The seed-0 split contained 21,299 training, 2,367 validation, 6,462 oracle-training and 1,616 shared held-out test samples. The test set contained 17 of 19 labels; Coastal wetlands had one positive. The label-distribution Jensen–Shannon divergence between seen training and test was 0.0811.
 
 ```bash
 python -m src.data.recommend_ben_s2_label_aware_candidates --metadata_csv outputs/ben_s2_clean_metadata.csv
@@ -68,12 +93,24 @@ Earlier Gadi runs on this hard split recorded the following **exploratory legacy
 | Pooled LoRA-style adapter | 0.333 | 0.646 | 0.218 |
 | Oracle LoRA-style adapter | 0.343 | 0.687 | 0.222 |
 
-The runs used a random frozen backbone. The legacy oracle evaluated its test set repeatedly and selected checkpoints using test performance, and the old metrics averaged over absent classes. Therefore these single-seed results should not be interpreted as reliable evidence of an oracle gap or compared directly with the revised protocol. Re-run with the current code, fixed selection, pretrained weights, per-class support and multiple seeds before drawing conclusions.
+On this split the oracle adapter was about 0.010 mAP above the pooled adapter, and both adapters were above head-only training.
+
+The same legacy pipeline on the first (`T29SND_summer`) split gave:
+
+| Model | mAP | Micro-F1 | Macro-F1 |
+|---|---:|---:|---:|
+| Head only | 0.340 | 0.372 | 0.196 |
+| Pooled LoRA-style adapter | 0.362 | 0.465 | 0.249 |
+| Oracle LoRA-style adapter | 0.353 | 0.436 | 0.197 |
+
+On that split the oracle was scored on its 50% test half (4,108 samples), a subset of the pooled and head-only test set (8,216 samples), so its row is not a like-for-like comparison. These observations motivated the label-aware split with a shared test set.
+
+Caveats that apply to both tables: the runs used a random frozen backbone (`--pretrained false`). The legacy oracle evaluated its test set repeatedly and selected checkpoints using test performance, and the old metrics averaged over absent classes. The reported values are the final-epoch (epoch 10) rows of each run's metrics file. These single-seed results should not be interpreted as reliable evidence of an oracle gap or compared directly with the revised protocol. Re-run with the current code, fixed selection, pretrained weights, per-class support and multiple seeds before drawing conclusions.
 
 ## Repository structure
 
 ```
-src/data/            metadata, validation, split design, export, dataset, loader check
+src/data/            metadata, validation, split design (first and label-aware), export, dataset, loader check
 src/training/        train_baseline.py (modes, adapter, selection, metrics)
 nci/                 PBS templates, shared job body, environment setup, guide
 tests/               offline tests (synthetic data; no downloads)
@@ -116,7 +153,7 @@ See [`nci/README_NCI.md`](nci/README_NCI.md). The templates pass `bash -n`, and 
 
 ## Verification
 
-`python -m pytest tests` (44 tests, CPU, synthetic data) covers:
+`python -m pytest tests` (46 tests, CPU, synthetic data) covers:
 
 - data loading and label mapping;
 - split disjointness and the held-out-cell definition;
@@ -136,7 +173,7 @@ Not verified here: any run on real BigEarthNet-S2 data, GPU-scale training, or a
 ## Limitations
 
 - No results from the revised protocol are published. Results produced with earlier versions are not comparable: they used a random backbone, oracle selection on test data, last-epoch test evaluation, and AP averaged over absent classes. The current behaviour is `protocol_version: 2`.
-- One held-out cell and one seed. Patches from the held-out tile appear in training in other seasons, so this tests compositional (tile × season) generalisation, not spatial independence. The random oracle and validation halves contain spatially adjacent patches.
+- One held-out cell per split and one seed. Patches from the held-out tile appear in training in other seasons, so this tests compositional (tile × season) generalisation, not spatial independence. The random oracle and validation halves contain spatially adjacent patches.
 - The label vocabulary is built from the label names in the split files, including test splits. It is not used for selection.
 - RGB bands only; no ImageNet mean/std normalisation; fixed 0.5 threshold for F1.
 - No hardware or latency measurements; not intended for deployment.
